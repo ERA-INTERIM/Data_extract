@@ -1,0 +1,246 @@
+%This script will extract the data from a specified ERA-Interim data file
+%and interpolate it to DALES heights at the defined location
+
+%% netCDF read routine based on CS_read_netCDF.m 
+clear all; close all;
+nc_filename = 'ERA_ML_20030701.nc';                         %Insert file of interest here
+                                
+ncid=netcdf.open(nc_filename, 'nowrite'); 
+
+% Get information about the contents of the file.
+[numdims, numvars, ~, unlimdimID] = netcdf.inq(ncid);
+
+ disp(' '),disp(' '),disp(' ')
+ disp('________________________________________________________')
+ disp('^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~')
+ disp(['VARIABLES CONTAINED IN THE netCDF FILE: ' nc_filename ])
+ disp(' ')
+for i = 0:numvars-1
+    [varname, xtype, dimids, numatts] = netcdf.inqVar(ncid,i);
+     disp(['--------------------< ' varname ' >---------------------'])
+    flag = 0;
+    for j = 0:numatts - 1
+        attname1 = netcdf.inqAttName(ncid,i,j);
+        attname2 = netcdf.getAtt(ncid,i,attname1);
+          disp([attname1 ':  ' num2str(attname2)])
+        if strmatch('add_offset',attname1)
+            offset = attname2;
+        end
+        if strmatch('scale_factor',attname1)
+            scale = attname2;
+            flag = 1;
+        end        
+    end
+     disp(' ')
+    
+    if flag
+        varname=genvarname(varname);
+        eval([varname '= double(double(netcdf.getVar(ncid,i))*scale + offset);'])
+         disp('scale and offset')
+    else
+        varname=genvarname(varname);
+        eval([varname '= double(netcdf.getVar(ncid,i));'])   
+    end
+end
+ disp('^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~^~')
+ disp('________________________________________________________')
+ disp(' '),disp(' ')
+
+
+%%%%%%%%%%%%%%%%%%%%%
+%Step 1: Specify the point from which to extract the data
+x=1;        %Latitude entry (1,2 or 3)
+y=1;        %Longitude entry (1,2 or 3)
+
+%Step 2: Finding the pressures at location (x,y) for all levels
+lnsp_xy=[squeeze(lnsp(x,y,:,:))];        %Creates a 60x8 matrix containing the log of surface pressure at 8 different times in point (x,y)
+sp_xy=exp(lnsp_xy);                      %Surface pressure in Pa
+
+a_alt=ncread('ERA-Interim_coordvars.nc', 'a_model_alt');        %a and b coefficients for pressure at each model level
+b_alt=ncread('ERA-Interim_coordvars.nc', 'b_model_alt');        %Downloaded from: rda.ucar.edu/datasets/ds627.0/docs/Eta_coordinate/
+A_alt=repmat(a_alt,1,8);                                        %Expanding the matrix to match size of sp_xy
+B_alt=repmat(b_alt,1,8);
+p_xy=A_alt+B_alt.*sp_xy;                                        %Pressure at each level at location (x,y)
+
+%Step 3: Temperatures at location (x,y) for all levels
+t_xy=[squeeze(t(x,y,:,:))];
+
+%Step 4: Finding the vertical velocities at location (x,y) in m/s
+w_xy=[squeeze(w(x,y,:,:))];                                     %Vertical velocity in Pa/s
+R_d=287.058;                                                    %Specific gas constant for dry air in J/(kg/K) => m2/(s2 K)
+g=9.81;                                                         %Standard acceleration due to gravity in m/s2
+rho=p_xy./(R_d*t_xy);                                           %Density in kg/m3 
+w_s=-w_xy./(rho*g);                                             %Vertical velocity in m/s
+ 
+w_sm=mean(w_s,2);                                               %The mean of the vertical velocity at each level
+w_ssd=std(w_s,0,2);                                             %The standard deviation of the vertical velocity at each level 
+w_unc=w_ssd/sqrt(8);                                            %The uncertainty in the mean at each level
+% figure;
+% hold on
+% plot(w_sm,level);                                               %Plots of the mean and the upper and lower bounds of the mean
+% plot(w_sm+w_std,level);
+% plot(w_sm-w_std,level);
+
+%Step 5: Converting the pressures at all levels to height in m at point
+%(x,y)
+for k=1:59                                                      %This for-loop calculates the average temperature for all vertical consecutive datapoints
+    for l=1:8
+    t_av(k,l)=(t_xy(k,l)+t_xy(k+1,l))/2;
+end
+end
+lnp_xy=log(p_xy);                                               %The natural logarithm of the pressure at each level
+dlnp_xy=diff(lnp_xy);                                           %Difference between the logarithms of vertical consecutive pressures
+dh=(dlnp_xy.*t_av*R_d/g);                                       %Calcultion of dh
+for k=1:8                                                       %Set starting height (this is a bit arbitrary, but pressures around 640 mbar are known at ground level for DomeC)
+    dh(60,k)=10;   
+end                                                            
+h=cumsum(dh, 'reverse');                                        %Calculate the heights using the reversed cumulative sum
+
+%Step 6: Specific humidity at all levels in (x,y)
+q_xy=[squeeze(q(x,y,:,:))];
+
+%Step 7: Other variables in the file at all levels in (x,y)
+tswr_xy=[squeeze(p1000x2E162(x,y,:,:))];                %Tendency of short wave radiation
+tlwr_xy=[squeeze(p1010x2E162(x,y,:,:))];                %Tendency of long wave radiation
+tcsswr_xy=[squeeze(p1020x2E162(x,y,:,:))];              %Tendency of clear sky short wave radiation
+tcslwr_xy=[squeeze(p1030x2E162(x,y,:,:))];              %Tendency of clear sky long wave radiation
+umf_xy=[squeeze(p1040x2E162(x,y,:,:))];                 %Updraught mass flux
+dmf_xy=[squeeze(p1050x2E162(x,y,:,:))];                 %Downdraught mass flux
+udr_xy=[squeeze(p1060x2E162(x,y,:,:))];                 %Updraught detrainment rate
+ddr_xy=[squeeze(p1070x2E162(x,y,:,:))];                 %Downdraught detrainment rate
+tpf_xy=[squeeze(p1080x2E162(x,y,:,:))];                 %Total precipitation flux
+tdc_xy=[squeeze(p1090x2E162(x,y,:,:))];                 %Turbulent diffusion coefficient for heat
+ttdtp_xy=[squeeze(p1100x2E162(x,y,:,:))];               %Tendency of temperature due to physics
+tshdtp_xy=[squeeze(p1110x2E162(x,y,:,:))];              %Tendency of specific humidity due to physics
+tudtp_xy=[squeeze(p1120x2E162(x,y,:,:))];               %Tendency of u component due to physics
+tvdtp_xy=[squeeze(p1130x2E162(x,y,:,:))];               %Tendency of v component due to physics
+z_xy=[squeeze(z(x,y,:,:))];                             %Geopotential
+vo_xy=[squeeze(vo(x,y,:,:))];                           %Vorticity (relative)
+d_xy=[squeeze(d(x,y,:,:))];                             %Divergence of wind
+o3_xy=[squeeze(o3(x,y,:,:))];                           %Ozone mass mixing ratio
+clwc_xy=[squeeze(clwc(x,y,:,:))];                       %Specific cloud liquid water content
+ciwc_xy=[squeeze(ciwc(x,y,:,:))];                       %Specific cloud ice water content
+cc_xy=[squeeze(cc(x,y,:,:))];                           %Cloud cover
+
+
+%Step 8: Interpolation of the data to the DALES-input heights
+M=dlmread('lscale.inp.009','',2,0);                             %Import DALES input file
+h_d=repmat(M(:,1),1,8);
+
+for k=1:8
+w_i(:,k)=interp1(h(:,k),w_s(:,k),h_d(:,k),'spline','extrap');   %Returns a matrix with interpolated values of vertical velocity at the assigned heights
+end
+
+for k=1:8
+     t_i(:,k)=interp1(h(:,k),t_xy(:,k),h_d(:,k),'spline','extrap');        %Returns a matrix with interpolated values of temperature at the assigned heights
+end
+
+for k=1:8
+     q_i(:,k)=interp1(h(:,k),q_xy(:,k),h_d(:,k),'spline','extrap');        %Returns a matrix with interpolated values of specific humidity at the assigned heights
+end
+
+for k=1:8
+     p_i(:,k)=interp1(h(:,k),p_xy(:,k),h_d(:,k),'spline','extrap');        %Returns a matrix with interpolated values of pressure at the assigned heights
+end
+
+
+for k=1:8
+     tswr_i(:,k)=interp1(h(:,k),tswr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+
+for k=1:8
+     tlwr_i(:,k)=interp1(h(:,k),tlwr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+
+for k=1:8
+     tcsswr_i(:,k)=interp1(h(:,k),tcsswr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+
+for k=1:8
+     tcslwr_i(:,k)=interp1(h(:,k),tcslwr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+for k=1:8
+     umf_i(:,k)=interp1(h(:,k),umf_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+for k=1:8
+     dmf_i(:,k)=interp1(h(:,k),dmf_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+for k=1:8
+     udr_i(:,k)=interp1(h(:,k),udr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     ddr_i(:,k)=interp1(h(:,k),ddr_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     tpf_i(:,k)=interp1(h(:,k),tpf_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     tdc_i(:,k)=interp1(h(:,k),tdc_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     ttdtp_i(:,k)=interp1(h(:,k),ttdtp_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     tshdtp_i(:,k)=interp1(h(:,k),tshdtp_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     tudtp_i(:,k)=interp1(h(:,k),tudtp_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     tvdtp_i(:,k)=interp1(h(:,k),tvdtp_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     z_i(:,k)=interp1(h(:,k),z_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     vo_i(:,k)=interp1(h(:,k),vo_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     d_i(:,k)=interp1(h(:,k),d_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     o3_i(:,k)=interp1(h(:,k),o3_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     clwc_i(:,k)=interp1(h(:,k),clwc_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     ciwc_i(:,k)=interp1(h(:,k),ciwc_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+for k=1:8
+     cc_i(:,k)=interp1(h(:,k),cc_xy(:,k),h_d(:,k),'spline','extrap');       
+end
+
+%Step 9: Writing the interpolated data to files
+% 
+%  dlmwrite('verticalvelocity200307_33',w_i,'-append','delimiter','\t');   %write matrix to file (rename)
+%  dlmwrite('temperature200307_33',t_i,'-append','delimiter','\t');         
+%  dlmwrite('specifichumidity200307_33',q_i,'-append','delimiter','\t');  
+%  dlmwrite('pressure200307_33',p_i,'-append','delimiter','\t');
+%  dlmwrite('tswr200307_33',tswr_i,'-append','delimiter','\t');
+%  dlmwrite('tlwr200307_33',tlwr_i,'-append','delimiter','\t');
+%  dlmwrite('tcsswr200307_33',tcsswr_i,'-append','delimiter','\t');
+%  dlmwrite('tcslwr200307_33',tcslwr_i,'-append','delimiter','\t');
+%  dlmwrite('umf200307_33',umf_i,'-append','delimiter','\t');
+%  dlmwrite('dmf200307_33',dmf_i,'-append','delimiter','\t');
+%  dlmwrite('udr200307_33',udr_i,'-append','delimiter','\t');
+%  dlmwrite('ddr200307_33',ddr_i,'-append','delimiter','\t');
+%  dlmwrite('tpf200307_33',tpf_i,'-append','delimiter','\t');
+%  dlmwrite('tdc200307_33',tdc_i,'-append','delimiter','\t');
+%  dlmwrite('ttdtp200307_33',ttdtp_i,'-append','delimiter','\t');
+%  dlmwrite('tshdtp200307_33',tshdtp_i,'-append','delimiter','\t');
+%  dlmwrite('tudtp200307_33',tudtp_i,'-append','delimiter','\t');
+%  dlmwrite('tvdtp200307_33',tvdtp_i,'-append','delimiter','\t');
+%  dlmwrite('geopotential200307_33',z_i,'-append','delimiter','\t');
+%  dlmwrite('vorticity200307_33',vo_i,'-append','delimiter','\t');
+%  dlmwrite('divergence200307_33',d_i,'-append','delimiter','\t');
+%  dlmwrite('ozone200307_33',o3_i,'-append','delimiter','\t');
+%  dlmwrite('clwc200307_33',clwc_i,'-append','delimiter','\t');
+%  dlmwrite('ciwc200307_33',ciwc_i,'-append','delimiter','\t');
+%  dlmwrite('cloudcover200307_33',cc_i,'-append','delimiter','\t');
