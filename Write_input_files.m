@@ -18,25 +18,6 @@ dlmwrite('lscale.inp.024',M,'delimiter','\t');
 % dlmwrite('prof.inp.019',N,'delimiter','\t');
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 % K=ones(132,8);                  %create matrix of only ones
 % x=linspace(0,1,132);
 y=ones(132,1);
